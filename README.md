@@ -85,10 +85,12 @@ be downloaded, the existing thumbnail is shown. The original search images and
 indexes remain paired; replacing images for model input requires rebuilding
 the image index separately.
 
-Result cards show each product's name, type, description, price availability,
-and a link. The small dataset contains product attributes but no prices,
-retailer descriptions, or purchase URLs. Descriptions are assembled from its
-attributes, missing prices are marked unavailable, and links lead to shopping
+Result cards feature large photos, match-order badges, compact attribute tags,
+and a score footer with a shopping link. The grid adapts to desktop and mobile
+screens. Attribute values use larger, bold text, and the search panel matches
+the cards with rounded controls and a green search button. Prices are hidden. The small dataset contains
+product attributes but no retailer descriptions or purchase URLs. A supplied
+retailer description appears below the attributes; links lead to shopping
 searches unless a retailer URL is supplied.
 
 To add real details, copy `product_details.example.csv` to
