@@ -73,17 +73,82 @@ Handles all inference requests
 
 ### How to Run the Full System
 
+#### Product details and scores
+
+The small dataset stores 60 x 80 pixel thumbnails. For sharper result photos,
+run `.venv\Scripts\python.exe setup_image_links.py` and restart the backend.
+This downloads only the image URL CSV from the
+[full Fashion Product Images Dataset](https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-dataset).
+The API fetches original JPEG photos when viewed and caches them in
+`data/images_hd/`. Cards provide a full-size photo link. If an original cannot
+be downloaded, the existing thumbnail is shown. The original search images and
+indexes remain paired; replacing images for model input requires rebuilding
+the image index separately.
+
+Result cards show each product's name, type, description, price availability,
+and a link. The small dataset contains product attributes but no prices,
+retailer descriptions, or purchase URLs. Descriptions are assembled from its
+attributes, missing prices are marked unavailable, and links lead to shopping
+searches unless a retailer URL is supplied.
+
+To add real details, copy `product_details.example.csv` to
+`data/product_details.csv` and fill rows using the dataset's product IDs:
+`id,price,currency,description,product_url`. Use numeric prices, a currency such
+as `INR`, and an HTTP(S) retailer URL. Do not change the order of
+`cleaned_products.csv`; IDs join the extra details without changing index rows.
+The API reloads supplemental details when the file changes; search again to
+see them.
+
+Ranking scores order matches within a search; they are not confidence or
+accuracy percentages. Text scores include model similarity plus type (+2),
+keyword (+1.5), and colour (+1) bonuses. Image scores use image-model
+similarity. Combined scores blend the candidate-normalized text and image
+rankings with equal weights. Scores cannot be compared across search modes.
+
+#### Windows local setup
+
+Run these commands from this repository's folder (Python 3.12 is supported):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe setup_data.py
+```
+
+`setup_data.py` downloads the original public Kaggle dataset (about 565 MiB),
+extracts the images, and creates `data/cleaned_products.csv`. It reproduces the
+notebooks' image-validation filter so metadata rows match the included FAISS
+indexes. The first search downloads the CLIP model into `models/`.
+
+Start both services in the background:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+```
+
+Open http://localhost:8501 for the UI or http://127.0.0.1:8000/docs for the API.
+Service logs and process IDs are saved in `.cache/`. To stop the services:
+
+```powershell
+taskkill.exe /PID (Get-Content .cache\backend.pid) /T /F
+taskkill.exe /PID (Get-Content .cache\frontend.pid) /T /F
+```
+
+Alternatively, run the following backend and frontend commands in separate
+terminals using the virtual environment's Python.
+
 #### Start Backend API
 
 ```bash
-uvicorn src.api:app --reload
+python -m uvicorn src.api:app --reload
 ```
 
 Runs at : http://127.0.0.1:8000
 
 #### Start Frontend UI
 ```bash
-streamlit run src/ui.py
+python -m streamlit run src/ui.py
 ```
 
 Runs at : http://localhost:8501

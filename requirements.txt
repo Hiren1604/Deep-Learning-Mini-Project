@@ -3,7 +3,7 @@ torch>=2.0.0
 torchvision>=0.15.0
 
 # Transformers (CLIP)
-transformers>=4.35.0
+transformers>=4.35.0,<5
 
 # Vector Search
 faiss-cpu>=1.7.4

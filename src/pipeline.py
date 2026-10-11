@@ -40,11 +40,13 @@ class ProductSearchPipeline:
         
         if self.model is None or self.processor is None:
             self.model = CLIPModel.from_pretrained(
-                "openai/clip-vit-base-patch32"
-            ).to(self.device)
+                "openai/clip-vit-base-patch32",
+                cache_dir=os.path.join(self.project_dir, "models")
+            ).to(self.device).eval()
 
             self.processor = CLIPProcessor.from_pretrained(
-                "openai/clip-vit-base-patch32"
+                "openai/clip-vit-base-patch32",
+                cache_dir=os.path.join(self.project_dir, "models")
             )
 
     def load_metadata(self):
