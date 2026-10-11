@@ -107,6 +107,21 @@ keyword (+1.5), and colour (+1) bonuses. Image scores use image-model
 similarity. Combined scores blend the candidate-normalized text and image
 rankings with equal weights. Scores cannot be compared across search modes.
 
+Explicit audience words (for example, `shoes women` or `men's shirts`)
+filter products using the catalog's gender field. This applies to both
+text and combined searches; image-only search does not infer an audience.
+The candidate pool expands when necessary to find eligible matches, without
+filling results with products outside the requested audience.
+Supported explicit product types (shoes, shirts, jackets, jeans, dresses,
+watches, and bags) also constrain both text and combined retrieval.
+
+Text queries are checked against catalog product vocabulary, attributes, and
+brand names before model inference. Unrelated queries show a catalog-scope
+message with examples instead of arbitrary nearest matches. A supported query
+with no eligible products shows a separate no-match message. This vocabulary
+check is a heuristic for text queries, not a trained intent classifier; image-only
+search continues to rank catalog images by visual similarity.
+
 #### Windows local setup
 
 Run these commands from this repository's folder (Python 3.12 is supported):

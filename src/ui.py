@@ -54,13 +54,17 @@ if search_clicked:
 if "search_response" in st.session_state:
     response_data = st.session_state["search_response"]
     results = response_data.get("results", [])
-    st.subheader("Your matches")
-    st.caption(f"{len(results)} finds, ordered by relevance. Select a photo for a closer look.")
-    with st.expander("What does the score mean?"):
-        st.write(response_data.get("score_explanation", "Higher scores rank first; compare only within the same search."))
-        st.write("Text-search bonuses: +2 for product type, +1.5 for a query keyword, and +1 for colour. Combined search uses equal text and image weights.")
     if not results:
-        st.warning("No results found.")
-
-    cards = "".join(render_product_card(item, rank, API_URL) for rank, item in enumerate(results, 1))
-    st.markdown(f'<div class="product-grid">{cards}</div>', unsafe_allow_html=True)
+        message = response_data.get("message") or "No products match this search. Try a broader description."
+        if response_data.get("status") == "out_of_scope":
+            st.info(message)
+        else:
+            st.warning(message)
+    else:
+        st.subheader("Your matches")
+        st.caption(f"{len(results)} finds, ordered by relevance. Select a photo for a closer look.")
+        with st.expander("What does the score mean?"):
+            st.write(response_data.get("score_explanation", "Higher scores rank first; compare only within the same search."))
+            st.write("Text-search bonuses: +2 for product type, +1.5 for a query keyword, and +1 for colour. Combined search uses equal text and image weights.")
+        cards = "".join(render_product_card(item, rank, API_URL) for rank, item in enumerate(results, 1))
+        st.markdown(f'<div class="product-grid">{cards}</div>', unsafe_allow_html=True)

@@ -1,10 +1,12 @@
 import os
+import re
 import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
 import faiss
 from transformers import CLIPProcessor, CLIPModel
+from src.query_policy import CatalogQueryPolicy
 
 class ProductSearchPipeline:
     def __init__(self, project_dir : str):
@@ -19,16 +21,26 @@ class ProductSearchPipeline:
 
         self.metadata = None
         self.query_cache = {}
+        self.query_policy = None
 
         # Mapping of keywords to product categories
         self.category_keywords = {
             "jacket" : ["jacket", "coat", "jerkin", "tuxedo"],
             "shirt": ["shirt", "tshirt", "t-shirt"],
-            "shoes": ["shoe", "sneaker", "trainer", "running", "jogging"],
+            "shoes": ["shoe", "sneaker", "trainer", "boot"],
             "jeans": ["jeans", "denim"],
             "dress": ["dress", "gown"],
             "watch": ["watch", "wristwatch", "pocket-watch"],
             "bag": ["bag", "handbag", "backpack", "carrier-bag"]
+        }
+        self.category_types = {
+            "jacket": {"Jackets", "Rain Jacket", "Nehru Jackets", "Blazers"},
+            "shirt": {"Shirts", "Tshirts", "Lounge Tshirts"},
+            "shoes": {"Casual Shoes", "Sports Shoes", "Formal Shoes", "Flats", "Heels", "Booties"},
+            "jeans": {"Jeans", "Jeggings"},
+            "dress": {"Dresses"},
+            "watch": {"Watches"},
+            "bag": {"Handbags", "Backpacks", "Duffel Bag", "Laptop Bag", "Messenger Bag", "Trolley Bag", "Rucksacks"},
         }
     
 
@@ -72,12 +84,13 @@ class ProductSearchPipeline:
             Improve category detection using substring + semantic matching
         """
 
-        query_text = query_text.lower()
-
+        tokens = set(re.findall(r"[a-z]+(?:-[a-z]+)?", query_text.lower()))
         for category, keywords in self.category_keywords.items():
-            for keyword in keywords:
-                if keyword in query_text:
-                    return category
+            aliases = {category, *keywords}
+            aliases.update(word + "s" for word in list(aliases))
+            aliases.update(word + "es" for word in list(aliases) if word.endswith(("ss", "ch")))
+            if tokens & aliases:
+                return category
         
         return None # fallback if nothing matches
     
@@ -95,6 +108,60 @@ class ProductSearchPipeline:
                 return color
             
         return None
+
+    @staticmethod
+    def detect_query_genders(query_text):
+        """Treat explicit audience words as catalog constraints, using whole words."""
+        tokens = set(re.findall(r"[a-z]+", (query_text or "").lower()))
+        aliases = {
+            "Women": {"women", "womens", "woman", "female", "ladies", "lady"},
+            "Men": {"men", "mens", "man", "male", "gentlemen"},
+            "Girls": {"girl", "girls"},
+            "Boys": {"boy", "boys"},
+            "Unisex": {"unisex"},
+        }
+        genders = {gender for gender, words in aliases.items() if tokens & words}
+        if tokens & {"kid", "kids", "child", "children"}:
+            genders.update(("Girls", "Boys"))
+        return genders or None
+
+    def query_supported(self, query_text):
+        self.load_metadata()
+        if self.query_policy is None:
+            self.query_policy = CatalogQueryPolicy(self.metadata)
+        return self.query_policy.supports(query_text)
+
+    def _search_candidates(self, index, embedding, count, allowed_genders=None, allowed_category=None):
+        """Expand the retrieval pool until enough eligible products are available."""
+        self.load_metadata()
+        total = int(index.ntotal)
+        eligible = np.zeros(total, dtype=bool)
+        catalog_size = min(total, len(self.metadata))
+        if allowed_genders is None:
+            eligible[:catalog_size] = True
+        elif "gender" in self.metadata.columns:
+            audiences = self.metadata["gender"].fillna("").astype(str).str.strip().str.casefold()
+            eligible[:catalog_size] = audiences.iloc[:catalog_size].isin(
+                {gender.casefold() for gender in allowed_genders}
+            ).to_numpy()
+        if allowed_category:
+            types = self.metadata["articleType"].fillna("").astype(str).str.strip().str.casefold()
+            eligible[:catalog_size] &= types.iloc[:catalog_size].isin(
+                {name.casefold() for name in self.category_types[allowed_category]}
+            ).to_numpy()
+        target = min(max(int(count), 0), int(eligible.sum()))
+        if target == 0:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
+        pool_size = min(total, target * 2 if allowed_genders else target)
+        while True:
+            scores, indices = index.search(embedding, pool_size)
+            valid = (indices[0] >= 0) & (indices[0] < total)
+            candidate_ids, candidate_scores = indices[0][valid], scores[0][valid]
+            keep = eligible[candidate_ids]
+            candidate_ids, candidate_scores = candidate_ids[keep], candidate_scores[keep]
+            if len(candidate_ids) >= target or pool_size == total:
+                return candidate_ids[:target], candidate_scores[:target]
+            pool_size = min(total, pool_size * 2)
     
     # -----------------------
     # Embedding utilities
@@ -132,6 +199,8 @@ class ProductSearchPipeline:
         """
 
 
+        if len(scores) == 0:
+            return []
         min_s = min(scores)
         max_s = max(scores)
 
@@ -295,6 +364,8 @@ class ProductSearchPipeline:
                 5. Return top_k filtered results
         """
 
+        if not self.query_supported(query_text):
+            return []
         self.load_models()
         self.load_indexes()
         self.load_metadata()
@@ -307,7 +378,11 @@ class ProductSearchPipeline:
         # Get "similarity scores" between query embeddings and top_k most similar text embeddings found in the index
         # Get "indices" corresponding to the top_k similar image embeddings.
         # We can use these indices to retrieve the most similar texts
-        scores, indices = self.text_index.search(query_embeddings, top_k * 10)
+        indices, scores = self._search_candidates(
+            self.text_index, query_embeddings, top_k * 10,
+            allowed_genders=self.detect_query_genders(query_text),
+            allowed_category=self.detect_query_category(query_text),
+        )
 
         # detect the category from the query
         detected_category = self.detect_query_category(query_text)
@@ -319,7 +394,7 @@ class ProductSearchPipeline:
 
         results = []
 
-        for idx, score in zip(indices[0], scores[0]):
+        for idx, score in zip(indices, scores):
 
             product = self.metadata.iloc[idx]
 
@@ -330,7 +405,9 @@ class ProductSearchPipeline:
 
             # Matching category and color
             keyword_match = any(token in product_name for token in query_tokens)
-            category_match = detected_category and detected_category in product_type
+            category_match = detected_category and product_type in {
+                name.casefold() for name in self.category_types[detected_category]
+            }
             color_match = detected_color and detected_color in product_name
 
             # Re-ranking score boost
@@ -355,7 +432,7 @@ class ProductSearchPipeline:
         return results[: top_k]
 
     
-    def search_image(self, image, top_k = 10):
+    def search_image(self, image, top_k = 10, allowed_genders=None, allowed_category=None):
         """
             Search products using an input image
 
@@ -375,9 +452,11 @@ class ProductSearchPipeline:
         # Get "similarity scores" between query embeddings and top_k most similar image embeddings found in the index
         # Get "indices" corresponding to the top_k similar image embeddings.
         # We can use these indices to retrieve the most similar images or their metadata
-        scores, indices = self.image_index.search(query_image_embeddings, top_k)
-
-        return indices[0], scores[0]
+        return self._search_candidates(
+            self.image_index, query_image_embeddings, top_k,
+            allowed_genders=allowed_genders,
+            allowed_category=allowed_category,
+        )
 
 
     def search_multimodal(self, text = None, image = None, top_k = 10, alpha = 0.5):
@@ -388,6 +467,8 @@ class ProductSearchPipeline:
             1 - alpha = weight for image
         """
 
+        if text and not self.query_supported(text):
+            return []
         self.load_models()
         self.load_indexes()
 
@@ -416,7 +497,10 @@ class ProductSearchPipeline:
         # Took larger pool (top_k*2) of candidates to ensure not missing items scoring high in one modality
         # but not make the cut off  in the initial individual search
         if image is not None:
-            image_indices, image_scores = self.search_image(image, top_k * 2)
+            image_indices, image_scores = self.search_image(
+                image, top_k * 2, allowed_genders=self.detect_query_genders(text),
+                allowed_category=self.detect_query_category(text) if text else None,
+            )
 
             # Normalize image scores
             image_scores = self._normalize_scores(image_scores)
